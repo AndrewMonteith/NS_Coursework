@@ -1,9 +1,9 @@
 from socket import *
-import sys, datetime, os.path, re
+import sys, datetime, os.path, re, time, pickle
 
 HOST, PORT = '127.0.0.1', 25000
 
-#------------------------------------ / Logging
+#----------- / Logging
 
 def timestamp():
     return str(datetime.datetime.utcnow())
@@ -16,7 +16,8 @@ def terminate(log_message):
     server_log("Terminating... Reason: " + log_message)
     sys.exit(0)
 
-#-------------------------------------- / Song Reading
+#----------- / Song Reading
+
 def remove_character(str, letter):
     return re.sub(letter, '', str)
 
@@ -49,7 +50,6 @@ def load_songs(text_lines):
     
     return Songs
 
-
 def load_songs_from_file(song_file_name):
     if not os.path.isfile(song_file_name):
         terminate("Failed to find the file " + song_file_name)
@@ -59,7 +59,7 @@ def load_songs_from_file(song_file_name):
 
 Songs = load_songs_from_file("100worst.txt")
 
-#-------------------------------------- / Socket Programming
+#------------- / Socket Programming
 
 def accept_artist_name(clientSock, addr):
     # Accepting 1024 bytes means at most we can handle a song artist whos name can
@@ -70,17 +70,25 @@ def accept_artist_name(clientSock, addr):
     server_log("Connection from `%s` requesting artist `%s`" % (str(addr), artist_name))
     return artist_name
 
+def get_response(artist_name):
+    return Songs[artist_name] if artist_name in Songs else []
+
 def listen_on_socket(serverSock):
     serverSock.listen(1) 
     serverSock.settimeout(None) 
 
     while True:
         clientSock, addr = serverSock.accept()
+
         server_log("Received connection from %s." % (str(addr)))
 
         artist_name = accept_artist_name(clientSock, addr)
 
-        print("Received artist name:", artist_name)
+        response = get_response(artist_name)
+
+        clientSock.send(pickle.dumps(response))
+
+        
 
 def launch_server():
     with socket(AF_INET, SOCK_STREAM) as serverSock:
