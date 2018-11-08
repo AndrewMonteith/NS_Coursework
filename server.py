@@ -59,10 +59,6 @@ def load_songs_from_file(song_file_name):
 
 Songs = load_songs_from_file("100worst.txt")
 
-print(Songs)
-
-raise Exception("foobar")
-
 #-------------------------------------- / Socket Programming
 
 def accept_artist_name(clientSock, addr):
