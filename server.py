@@ -9,8 +9,11 @@ def timestamp():
     return str(datetime.datetime.utcnow())
 
 log_file = open("server.log", "a")
-def server_log(log_message):
-    log_file.write(timestamp() + " : " + log_message)
+def server_log(log_message, with_timestamp=False):
+    if with_timestamp:
+        log_file.write(timestamp() + " : " + log_message + "\n") 
+    else:
+        log_file.write(log_message + "\n")
 
 def terminate(log_message):
     server_log("Terminating... Reason: " + log_message)
@@ -70,23 +73,29 @@ def accept_artist_name(clientSock, addr):
     server_log("Connection from `%s` requesting artist `%s`" % (str(addr), artist_name))
     return artist_name
 
-def get_response(artist_name):
-    return Songs[artist_name] if artist_name in Songs else []
-
 def listen_on_socket(serverSock):
     serverSock.listen(1) 
     serverSock.settimeout(None) 
 
+    server_log("Server Started")
+
     while True:
         clientSock, addr = serverSock.accept()
 
-        server_log("Received connection from %s." % (str(addr)))
+        server_log("Received connection from %s." % str(addr))
 
         artist_name = accept_artist_name(clientSock, addr)
 
-        response = get_response(artist_name)
+        songs = Songs.get(artist_name, []) 
 
-        clientSock.send(pickle.dumps(response))
+        if not songs:
+            server_log("Client requested artist `%s` that does not exist" % artist_name)
+
+        try:
+            clientSock.send(pickle.dumps(songs))
+            server_log("Client connection was successful")
+        except e:
+            server_log("Connection was closed by client before response was sent.")
 
         
 
