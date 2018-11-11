@@ -1,3 +1,12 @@
+'''
+    Filename: server.py
+    Author: Andrew Monteith
+    Description:
+        Simple server that responds to queries from a given client, where
+        the query is simply a song writer and the response is all
+        songs that the server knows the author has written.
+''' 
+
 from socket import *
 import sys, datetime, os.path, re, time, pickle
 
@@ -9,23 +18,17 @@ def timestamp():
     return str(datetime.datetime.utcnow())
 
 log_file = open("server.log", "a")
-def server_log(log_message, with_timestamp=False):
-    if with_timestamp:
-        log_file.write(timestamp() + " : " + log_message + "\n") 
-    else:
-        log_file.write(log_message + "\n")
-
+def log(log_message):
+    log_file.write(timestamp() + " : " + log_message + "\n") 
+    
 def terminate(log_message):
-    server_log("Terminating... Reason: " + log_message)
+    log("Terminating... Reason: " + log_message)
     sys.exit(0)
 
 #----------- / Song Reading
 
-def remove_character(str, letter):
-    return re.sub(letter, '', str)
-
 def song_entries(text_lines):
-    starts_with_ranking, ends_in_year = re.compile("^\d{1,3}\s?-"), re.compile("\d{4}$")
+    starts_with_ranking, ends_in_year = re.compile(r"^\d{1,3}\s?-"), re.compile(r"\d{4}$")
     line_buffer = ''
     for line in map(str.strip, text_lines):
         if starts_with_ranking.search(line):
@@ -63,40 +66,73 @@ def load_songs_from_file(song_file_name):
 Songs = load_songs_from_file("100worst.txt")
 
 #------------- / Socket Programming
-
+OPERATION_FAILURE = 'Operation-Failed' # Opaque value to indiciate failure
+def safe_execute(failure, operation, return_arity=1):
+    try:
+        return operation()
+    except Exception:
+        failure()
+        return (OPERATION_FAILURE,)*return_arity 
+    
 def accept_artist_name(clientSock, addr):
     # Accepting 1024 bytes means at most we can handle a song artist whos name can
     # be up to 1024 letters. I feel this is a same assumption.
-    raw_got = clientSock.recv(1024)
-    
-    artist_name = raw_got.decode()
-    server_log("Connection from `%s` requesting artist `%s`" % (str(addr), artist_name))
-    return artist_name
+    return clientSock.recv(1024).decode()
+
+def wait_for_close_request(clientSock):
+    clientSock.recv(1024)
+    clientSock.close()
 
 def listen_on_socket(serverSock):
     serverSock.listen(1) 
     serverSock.settimeout(None) 
 
-    server_log("Server Started")
+    log("Server Started")
 
     while True:
-        clientSock, addr = serverSock.accept()
+        clientSock, addr = safe_execute(
+            failure=lambda: log("Failed to receive a connection from the client"),
+            operation=lambda: serverSock.accept(),
+            return_arity=2)
+            
+        if clientSock == OPERATION_FAILURE:
+            return
+        log("Received a connection from {0}".format(addr))
 
-        server_log("Received connection from %s." % str(addr))
+        time_connected = time.time()        
+        def report_connection_terminated(reason):
+            def _report():
+                connection_length = time.time()-time_connected
+                log("Connection terminate. Duration {0}. Reason {1}".format(connection_length, reason))               
+            return _report
 
-        artist_name = accept_artist_name(clientSock, addr)
+        artist_name = str(safe_execute(
+            failure=report_connection_terminated("Failed to receive an artist from the client"),
+            operation=lambda: accept_artist_name(clientSock, addr)))
+
+        if artist_name == OPERATION_FAILURE:
+            return
+        print(artist_name)
+        log("Recevied a query request with artist {0}".format(artist_name))
 
         songs = Songs.get(artist_name, []) 
-
         if not songs:
-            server_log("Client requested artist `%s` that does not exist" % artist_name)
+            log("Client requested artist `{0}` that does not exist".format(artist_name))
 
-        try:
-            clientSock.send(pickle.dumps(songs))
-            server_log("Client connection was successful")
-        except e:
-            server_log("Connection was closed by client before response was sent.")
+        op_success = safe_execute(
+            failure=report_connection_terminated("Connection was closed by client before response was sent"),
+            operation= lambda: clientSock.send(pickle.dumps(songs)))
 
+        if op_success == OPERATION_FAILURE:
+            return
+        log("Sent response with {0} songs in.".format(len(songs)))
+
+        op_success = safe_execute(
+            failure=report_connection_terminated("Client never sent close request"),
+            operation=lambda: wait_for_close_request(clientSock))
+        if op_success == OPERATION_FAILURE:
+            return
+        log("Connection successfully closed.")
         
 
 def launch_server():
@@ -105,13 +141,14 @@ def launch_server():
         try:
             serverSock.bind((HOST, PORT))
         except OSError:
-            server_log("Failed to bind to host %s on port %d" % (HOST, PORT))
+            log("Failed to bind to host %s on port %d" % (HOST, PORT))
             return
-        except e:
-            server_log("Failed to open server for reason `%s`" % (str(e)))
+        except Exception as e:
+            log("Failed to open server for reason `%s`" % (str(e)))
             return
 
         listen_on_socket(serverSock)
+    log_file.close()
     
-server_log('Attempting launch server on %s:%d' % (HOST, PORT))
+log('Attempting launch server on %s:%d' % (HOST, PORT))
 launch_server()    
