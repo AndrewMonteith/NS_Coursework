@@ -32,6 +32,7 @@ def log(log_message, keep_silent=False):
     if not keep_silent:
         print(log_message)
     log_file.write(timestamp() + " : " + log_message + "\n")
+    log_file.flush()
 
 
 def terminate(log_message):
@@ -54,7 +55,10 @@ def safe_execute(failure, operation, return_arity=1):
         return operation()
     except Exception as e:
         failure(e)
-        return (OPERATION_FAILURE,)*return_arity
+        if return_arity == 1:
+            return OPERATION_FAILURE
+        else:
+            return (OPERATION_FAILURE,) * return_arity
 
 
 def get_user_input():
@@ -62,17 +66,16 @@ def get_user_input():
         Prompts the user for an input
         If input is empty, reprompts user
     '''
-    artist_name = input('Enter artist to lookup >').strip()
+    artist_name = input('Enter artist to lookup [quit to quit]>').strip()
     while not artist_name:
         print("That input is empty! Please enter the name again")
-        artist_name = input('Enter artist to lookup >').strip()
+        artist_name = input('Enter artist to lookup [quit to quit] >').strip()
     return artist_name
 
 
 def send_close_request(socket):
     "Waits for user input to close the connection"
-    input("Press `Enter` to close connection.")
-    socket.send("quit".encode())
+    socket.send(b"quit")
 
 
 # Socket Opening
@@ -85,47 +88,56 @@ with socket(AF_INET, SOCK_STREAM) as s:
         operation=lambda: s.connect((HOST, PORT)))
     log("Established connection")
 
-    # Prompt for input
-    artist_input = safe_execute(
-        failure=lambda e: terminate("User terminaed via Cntl-C"),
-        operation=get_user_input)
+    while True:
+        # Prompt for input
+        artist_input = safe_execute(
+            failure=lambda e: terminate("User terminaed via Cntl-C"),
+            operation=get_user_input)
+            
+        if artist_input == OPERATION_FAILURE:
+            break
 
-    # Send input to server
-    safe_execute(
-        failure=lambda e: terminate("Server refused query. {}".format(str(e))),
-        operation=lambda: s.send(artist_input.encode()))
-    log("Sent request `{0}` to server".format(artist_input), keep_silent=True)
+        if artist_input == "quit":
+            # Attempt to close the connection
+            safe_execute(
+                failure=lambda e: terminate(
+                    "Server refused close-connection request. {}".format(str(e))),
+                operation=lambda: send_close_request(s))
+            log("Close request was successful.")
+            break
 
-    time_now = time.time()
+        time_now = time.clock()
 
-    # Get response, assume artist has no more than 4 songs.
-    response = safe_execute(
-        failure=lambda e: terminate(
-            "Failed to receive a response. {}".format(str(e))),
-        operation=lambda: s.recv(4096))
+        # Send input to server
+        safe_execute(
+            failure=lambda e: terminate(
+                "Server refused query. {}".format(str(e))),
+            operation=lambda: s.send(artist_input.encode()))
+        log("Sent request `{0}` to server".format(
+            artist_input), keep_silent=True)
 
-    duration = time.time()-time_now  # how long it took to get response.
-    log("Took {0} seconds to get a respnose".format(
-        duration), keep_silent=True)
-    log("Length is {0} bytes".format(len(response)), keep_silent=True)
+        # Get response, assume artist has no more than 4 songs.
+        response = safe_execute(
+            failure=lambda e: terminate(
+                "Failed to receive a response. {}".format(str(e))),
+            operation=lambda: s.recv(4096))
 
-    # Deserialise response from the server.
-    songs = safe_execute(
-        failure=lambda e: terminate(
-            "Server response was malformed. {}".format(str(e))),
-        operation=lambda: pickle.loads(response))
+        duration = time.clock() - time_now  # how long it took to get response.
 
-    if not songs:
-        log("Arist `{0}` does have any songs".format(artist_input))
-    else:
-        log("Songs corresponding to arist:")
-        log(str(songs), keep_silent=True)
-        for song in songs:
-            print("\t-", song)
+        log("Took {0} seconds to get a response".format(
+            duration), keep_silent=True)
+        log("Length is {0} bytes".format(len(response)), keep_silent=True)
 
-    # Attempt to close the connection
-    safe_execute(
-        failure=lambda e: terminate(
-            "Server refused close-connection request. {}".format(str(e))),
-        operation=lambda: send_close_request(s))
-    log("Close request was successful.", keep_silent=True)
+        # Deserialise response from the server.
+        songs = safe_execute(
+            failure=lambda _: terminate(
+                "Server response was malformed. Must have terminated before responding input"),
+            operation=lambda: pickle.loads(response))
+
+        if not songs:
+            log("Arist `{0}` does have any songs".format(artist_input))
+        else:
+            log("Songs corresponding to arist:" + str(songs), keep_silent=True)
+            print("Songs corresponding to artist:")
+            for song in songs:
+                print("\t-", song)

@@ -19,7 +19,6 @@ HOST, PORT = '127.0.0.1', 25000
 
 # ----------- / Logging
 
-
 def timestamp():
     return str(datetime.datetime.utcnow())
 
@@ -31,6 +30,7 @@ log_file = open("server.log", "a")
 def log(log_message):
     "Writes a message to the output"
     log_file.write(timestamp() + " : " + log_message + "\n")
+    log_file.flush()
 
 
 def terminate(log_message):
@@ -59,12 +59,12 @@ def song_entries(text_lines):
 
 def load_songs(text_lines):
     "Returns a dictionary of artist-song from a text file"
-    Songs = {}
+    songs = {}
 
     def add_song(artist, title):
-        if artist not in Songs:
-            Songs[artist] = []
-        Songs[artist].append(title)
+        if artist not in songs:
+            songs[artist] = []
+        songs[artist].append(title)
 
     extract_data_re = re.compile(
         r"\d{1,3}\s?-\s?((?:\S|\S )+)(?:\s{2}\s*|-)((?:\S|\S )+)\s{2}\s*\d{4}")
@@ -74,7 +74,7 @@ def load_songs(text_lines):
             (song_name, song_artist) = extract_data_re.match(line).groups()
             add_song(song_artist, song_name)
 
-    return Songs
+    return songs
 
 
 def load_songs_from_file(song_file_name):
@@ -103,70 +103,83 @@ def safe_execute(failure, operation, return_arity=1):
         return operation()
     except Exception:
         failure()
-        return (OPERATION_FAILURE,)*return_arity
+        if return_arity == 1:
+            return OPERATION_FAILURE
+        else:
+            return (OPERATION_FAILURE,) * return_arity
 
 
-def accept_artist_name(clientSock, addr):
+def accept_artist_name(client_sock, addr):
     '''
         Accepts the server sending an artist name.
         Assumes artist name is not more than 1024 letters long
     '''
-    return clientSock.recv(1024).decode()
+    return client_sock.recv(1024).decode()
 
 
-def wait_for_close_request(clientSock):
-    '''
-        Waits for server to tell us to close the socket
-        We don't check what the server sent, we just know
-        that any communucation at this point means close.
-    '''
-    clientSock.recv(1024)  # Will error if client has already dropped
-    clientSock.close()
-
-
-def listen_on_socket(serverSock):
+def listen_on_socket(server_sock):
     '''
         Main server loop that servers the request to clients.
     '''
-    serverSock.listen(1)
+    server_sock.listen(1)
     # Server should never timeout from lack of clients.
-    serverSock.settimeout(None)
+    server_sock.settimeout(None)
 
     log("Server Started")
 
+    client_sock, addr, time_connected = None, None, None
+
+    def reset_state():
+        nonlocal client_sock, addr, time_connected
+        client_sock, addr, time_connected = None, None, None
+
     while True:
         # Listen for connetion
-        clientSock, addr = safe_execute(
-            failure=lambda: log(
-                "Failed to receive a connection from the client"),
-            operation=lambda: serverSock.accept(),
-            return_arity=2)
+        if client_sock is None:
+            client_sock, addr = safe_execute(
+                failure=lambda: log(
+                    "Failed to receive a connection from the client"),
+                operation=lambda: server_sock.accept(),
+                return_arity=2)
 
-        if clientSock == OPERATION_FAILURE:
-            return
-        log("Received a connection from {0}".format(addr))
-
-        time_connected = time.time()
-
+            if client_sock == OPERATION_FAILURE:
+                return
+            log("Received a connection from {0}".format(addr))
+            time_connected = time.time()
+            
         def report_connection_terminated(reason):
             '''
                 Returns function that takes message and logs it
                 alongside the duration of the connection
             '''
             def _report():
-                connection_length = time.time()-time_connected
+                connection_length = time.time() - time_connected
                 log("Connection terminated. Duration {0}. Reason {1}".format(
                     connection_length, reason))
             return _report
-
+        
         # Get the artist name from the socket
         artist_name = str(safe_execute(
             failure=report_connection_terminated(
                 "Failed to receive an artist from the client"),
-            operation=lambda: accept_artist_name(clientSock, addr)))
-
+            operation=lambda: accept_artist_name(client_sock, addr)))
+            
         if artist_name == OPERATION_FAILURE:
-            return
+            reset_state()
+            break
+
+        # Check if the user wants to quit.
+        if artist_name == "quit":
+            op_success = safe_execute(
+                failure=report_connection_terminated(
+                    "Failed to close client socket."),
+                operation=lambda: client_sock.close() )
+
+            if op_success != OPERATION_FAILURE:
+                report_connection_terminated("User requested to end connection")()
+
+            reset_state()
+            continue
 
         log("Recevied a query request with artist {0}".format(artist_name))
 
@@ -179,27 +192,21 @@ def listen_on_socket(serverSock):
         op_success = safe_execute(
             failure=report_connection_terminated(
                 "Connection was closed by client before response was sent"),
-            operation=lambda: clientSock.send(pickle.dumps(songs)))
+            operation=lambda: client_sock.send(pickle.dumps(songs)))
 
         if op_success == OPERATION_FAILURE:
-            return
+            reset_state()
+            continue
+
         log("Sent response with {0} songs in.".format(len(songs)))
-
-        # Wait for close request.
-        op_success = safe_execute(
-            failure=report_connection_terminated(
-                "Client never sent close request"),
-            operation=lambda: wait_for_close_request(clientSock))
-        if op_success == OPERATION_FAILURE:
-            return
-        log("Connection successfully closed.")
 
 
 def launch_server():
-    with socket(AF_INET, SOCK_STREAM) as serverSock:
+    "Starts the server on localhost."
+    with socket(AF_INET, SOCK_STREAM) as server_sock:
         # try to bind to port, listening for OSError if port already in use.
         try:
-            serverSock.bind((HOST, PORT))
+            server_sock.bind((HOST, PORT))
         except OSError:
             log("Failed to bind to host %s on port %d" % (HOST, PORT))
             return
@@ -207,7 +214,7 @@ def launch_server():
             log("Failed to open server for reason `%s`" % (str(e)))
             return
 
-        listen_on_socket(serverSock)
+        listen_on_socket(server_sock)
     log_file.close()
 
 
