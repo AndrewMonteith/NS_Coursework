@@ -19,6 +19,7 @@ HOST, PORT = '127.0.0.1', 25000
 
 # ----------- / Logging
 
+
 def timestamp():
     return str(datetime.datetime.utcnow())
 
@@ -59,6 +60,7 @@ def song_entries(text_lines):
 
 def load_songs(text_lines):
     "Returns a dictionary of artist-song from a text file"
+
     songs = {}
 
     def add_song(artist, title):
@@ -66,13 +68,24 @@ def load_songs(text_lines):
             songs[artist] = []
         songs[artist].append(title)
 
+    def add_multiple_aritst_song(artist_str, title):
+        delimiter = "/" if artist_str.find("/") != -1 else "featuring"
+
+        for artist in map(str.strip, artist_str.split(delimiter)):
+            add_song(artist, title)
+
     extract_data_re = re.compile(
         r"\d{1,3}\s?-\s?((?:\S|\S )+)(?:\s{2}\s*|-)((?:\S|\S )+)\s{2}\s*\d{4}")
+
     for line in song_entries(text_lines):
         match = extract_data_re.match(line)
         if match:
-            (song_name, song_artist) = extract_data_re.match(line).groups()
-            add_song(song_artist, song_name)
+            (song_name, artist_string) = extract_data_re.match(line).groups()
+
+            if artist_string.find("/") != -1 or artist_string.find("featuring") != -1:
+                add_multiple_aritst_song(artist_string, song_name)
+            else:
+                add_song(artist_string, song_name)
 
     return songs
 
@@ -87,7 +100,6 @@ def load_songs_from_file(song_file_name):
 
 
 Songs = load_songs_from_file("100worst.txt")
-
 # ------------- / Socket Programming
 OPERATION_FAILURE = 'Operation-Failed'  # Opaque value to indiciate failure
 
@@ -146,7 +158,7 @@ def listen_on_socket(server_sock):
                 return
             log("Received a connection from {0}".format(addr))
             time_connected = time.time()
-            
+
         def report_connection_terminated(reason):
             '''
                 Returns function that takes message and logs it
@@ -157,13 +169,13 @@ def listen_on_socket(server_sock):
                 log("Connection terminated. Duration {0}. Reason {1}".format(
                     connection_length, reason))
             return _report
-        
+
         # Get the artist name from the socket
         artist_name = str(safe_execute(
             failure=report_connection_terminated(
                 "Failed to receive an artist from the client"),
             operation=lambda: accept_artist_name(client_sock, addr)))
-            
+
         if artist_name == OPERATION_FAILURE:
             reset_state()
             break
@@ -173,10 +185,11 @@ def listen_on_socket(server_sock):
             op_success = safe_execute(
                 failure=report_connection_terminated(
                     "Failed to close client socket."),
-                operation=lambda: client_sock.close() )
+                operation=lambda: client_sock.close())
 
             if op_success != OPERATION_FAILURE:
-                report_connection_terminated("User requested to end connection")()
+                report_connection_terminated(
+                    "User requested to end connection")()
 
             reset_state()
             continue
